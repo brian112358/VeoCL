@@ -1,7 +1,7 @@
 /*
 
 	Open Source Amoveo OpenCL Miner
-	
+
 	for AMD & Nvidia GPU´s
 
 	Donations:
@@ -16,16 +16,31 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <CL/cl.h>
-#include <netdb.h>
+#include <sys/time.h>
+
+#ifndef WIN32
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#else
+#include <ws2tcpip.h>
+#include <winsock2.h>
+#endif
+
+#ifndef WIN32
+#include <netdb.h>
 #include <sys/types.h>
 #include <sys/select.h>
-#include <sys/time.h>
+#else
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <mmsystem.h>
+#endif
 
 #include "sha256.h"
 
+#define MAX_PLATFORMS  8
 #define MAXGPU          32
 #define NONCESIZE  	23
 
@@ -45,6 +60,8 @@ unsigned char *address;
 unsigned char *hostname;
 struct in_addr *poolip;
 int pollcount = 0;
+
+int platform;
 
 static char encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '+', '/'};
 static char *decoding_table = NULL;
@@ -122,13 +139,18 @@ void base64_cleanup() {
 }
 
 void nonblock(int sock) {
-	int flags = fcntl(sock, F_GETFL, 0);
-	flags = flags | O_NONBLOCK;
-	fcntl(sock, F_SETFL, flags);
+    #ifndef WIN32
+      int flags = fcntl(sock, F_GETFL, 0);
+      fcntl(sock, F_SETFL, O_NONBLOCK | flags);
+    #else
+      u_long flags = 1;
+
+      ioctlsocket(sock, FIONBIO, &flags);
+    #endif
 }
 
 int pool() {
-        int sd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+    int sd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
 
 	nonblock(sd);
 
@@ -146,8 +168,8 @@ int pool() {
 
 	char buffer[1000];
 
-	if(strlen(workPath) > 3) {	
-		sprintf(buffer, "POST %s HTTP/1.1\r\ncontent-type: application/octet-stream\r\ncontent-length: %i\r\nhost: %s:%i\r\nconnection: close\r\n\r\n[\"mining_data\", \"%s\"]", 
+	if(strlen(workPath) > 3) {
+		sprintf(buffer, "POST %s HTTP/1.1\r\ncontent-type: application/octet-stream\r\ncontent-length: %i\r\nhost: %s:%i\r\nconnection: close\r\n\r\n[\"mining_data\", \"%s\"]",
 			workPath,
 			(19 + (int)strlen(address)),
 			hostname,
@@ -155,7 +177,7 @@ int pool() {
 			address
 		);
 	} else {
-		sprintf(buffer, "POST %s HTTP/1.1\r\ncontent-type: application/octet-stream\r\ncontent-length: %i\r\nhost: %s:%i\r\nconnection: close\r\n\r\n[\"mining_data\",8080]", 
+		sprintf(buffer, "POST %s HTTP/1.1\r\ncontent-type: application/octet-stream\r\ncontent-length: %i\r\nhost: %s:%i\r\nconnection: close\r\n\r\n[\"mining_data\",8080]",
 			workPath,
 			20,
 			hostname,
@@ -178,7 +200,11 @@ int pool() {
 		return -1;
 	}
 
-	send(sd, buffer, strlen(buffer), MSG_NOSIGNAL);
+    #ifndef WIN32
+    send(sd, buffer, strlen(buffer), MSG_NOSIGNAL);
+    #else
+    send(sd, buffer, strlen(buffer), 0);
+    #endif
 
 	tv.tv_sec = 4;
 	tv.tv_usec = 0;
@@ -194,8 +220,12 @@ int pool() {
 		return -1;
 	}
 
+    #ifndef WIN32
 	int bytes = read(sd, buffer, 1000);
-        close(sd);
+    #else
+    int bytes = recv(sd, buffer, 1000, 0);
+    #endif
+    close(sd);
 
 	for(int i=0; i<bytes-8; i++) {
 		if(buffer[i] == '\r' && buffer[i+1] == '\n' && buffer[i+2] == '\r' && buffer[i+3] == '\n') {
@@ -210,7 +240,7 @@ int pool() {
 					} else {
 						int olen;
 						char *bf = base64_decode(&buffer[sp + 1], j - sp - 1, &olen);
-							
+
 						buffer[j+7] = 0;
 
 						if(buffer[j+12] == ']')
@@ -221,7 +251,7 @@ int pool() {
 						diff = strtol(&buffer[j+2], (char **)NULL, 10);
 						sharediff = strtol(&buffer[j+8], (char **)NULL, 10);
 
-						if (strncmp(data, bf, 32)!=0) {						
+						if (strncmp(data, bf, 32)!=0) {
 							printf("Network diff: %i, share diff: %i\n", diff, sharediff);
 							memcpy(data, bf, 32);
 						}
@@ -276,7 +306,11 @@ int submitnonce(char *nonce) {
 		return -1;
 	}
 
-	send(sd, buffer, strlen(buffer), MSG_NOSIGNAL);
+    #ifndef WIN32
+    send(sd, buffer, strlen(buffer), MSG_NOSIGNAL);
+    #else
+    send(sd, buffer, strlen(buffer), 0);
+    #endif
 
 	tv.tv_sec = 6;
 	tv.tv_usec = 0;
@@ -312,13 +346,13 @@ int submitnonce(char *nonce) {
 
 */
 
-static WORD pair2sci(WORD l[2]) {
+static SHA_WORD pair2sci(SHA_WORD l[2]) {
   return((256*l[0]) + l[1]);
 }
 
-WORD hash2integer(BYTE h[32]) {
-  WORD x = 0;
-  WORD y[2];
+SHA_WORD hash2integer(SHA_BYTE h[32]) {
+  SHA_WORD x = 0;
+  SHA_WORD y[2];
   for (int i = 0; i < 31; i++) {
     if (h[i] == 0) {
       x += 8;
@@ -357,13 +391,13 @@ WORD hash2integer(BYTE h[32]) {
 /* Copy end */
 
 struct gpuContext {
-        size_t local;                    
-        cl_context context;              
-        cl_command_queue commands;       
-        cl_program program;              
-        cl_kernel kernel;                
-        cl_mem input;                    
-        cl_mem output;                   
+        size_t local;
+        cl_context context;
+        cl_command_queue commands;
+        cl_program program;
+        cl_kernel kernel;
+        cl_mem input;
+        cl_mem output;
         pthread_mutex_t gpulock;
         pthread_t thread;
         int gpuid;
@@ -377,7 +411,7 @@ struct gpuContext {
 void *worker(void *p1) {
         struct gpuContext *gc = (struct gpuContext*)p1;
         int err;
-	BYTE nonces[NONCESIZE];
+	SHA_BYTE nonces[NONCESIZE];
 
 	size_t global = gc->load;
 
@@ -387,7 +421,12 @@ void *worker(void *p1) {
         for(;;) {
                 pthread_mutex_lock(&gc->gpulock);
 
+        #ifndef WIN32
 		read(randfd, nonces, NONCESIZE);
+        #else
+        for (int i = 0; i < NONCESIZE/4; ++i)
+            ((uint32_t*)nonces)[i] = (uint32_t)rand();
+        #endif
 
 		for (int i = 0; i < 32; i++)
 			in[i] = data[i];
@@ -410,7 +449,7 @@ void *worker(void *p1) {
 
                 struct timeval kernelStart, kernelEnd;
                 gettimeofday(&kernelStart,NULL);
-#ifdef CLWAIT			
+#ifdef CLWAIT
                 usleep(gc->waitus * 0.95);
 #endif
 
@@ -464,9 +503,10 @@ int main(int argc, char **argv) {
 	poolport = 8880;
 	hostname = "veopool.pw";
 	workPath = "/work";
+    platform = 0;
 
-        if (argc > 1) {
-		size_t lengthAddress = strlen(argv[1])+1;
+    if (argc > 1) {
+	    size_t lengthAddress = strlen(argv[1])+1;
 
 		if(argc > 2) {
 			for(int i=0;i<strlen(argv[2]);i++) {
@@ -483,36 +523,56 @@ int main(int argc, char **argv) {
 					i = 100000;
 				}
 			}
+            if (argc > 3) {
+                platform = atoi(argv[3]);
+            }
 		}
 
 		address = (char *)malloc(strlen(argv[1]) + 1);
 		strcpy(address, argv[1]);
 	} else {
-		printf("Usage: ./veoCL address poolip:port/path\n");
-		address = "BONJmlU2FUqYgUY60LTIumsYrW/c6MHte64y5KlDzXk5toyEMaBzWm8dHmdMfJmXnqvbYmlwim0hiFmYCCn3Rm0=";
+		printf("Usage: ./veoCL address poolip:port/path opencl_platform_id\n");
+		address = "BPbZHatSG6EtD/KnzSfvu9i/lTSFccHXMl883zWTN07b1puDrpDSen2yaR6zIbZfSxS59ZI0jhN9SkHLnSir/B8=";
 	}
 
 	printf("Mining to Address: %s\n",address);
 	printf("Mining to Pool: %s:%i%s\n",hostname,poolport,workPath);
 
+    #ifdef WIN32
+    // Initialize Winsock
+    int iResult;
+    WSADATA wsaData;
+    iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
+    if (iResult != 0) {
+        printf("WSAStartup failed: %d\n", iResult);
+        return -1;
+    }
+    #endif
+
 	// Resolve IP
 	struct hostent *host = gethostbyname(hostname);
 
 	if(host == NULL || host->h_addr_list == NULL) {
+        #ifndef WIN32
 		printf("Could not connect to pool.\n");
-		return -1;			
+        #else
+        printf("Could not connect to pool. Error %d\n", WSAGetLastError());
+        #endif
+		return -1;
 	}
 
 	memcpy(&poolip, &host->h_addr_list[0], sizeof(poolip));
-	
+
 	int err;
 
 	pthread_mutex_init(&mutex, NULL);
 
-        randfd = open("/dev/urandom", O_RDONLY);
+    #ifndef WIN32
+    randfd = open("/dev/urandom", O_RDONLY);
+    #endif
 
-        unsigned char pad[32];
-        SHA256_CTX ctx;
+    unsigned char pad[32];
+    SHA256_CTX ctx;
 
 	unsigned char *ccd = malloc(20000);
 
@@ -520,14 +580,18 @@ int main(int argc, char **argv) {
 	ccd[read(fd, ccd, 20000)] = 0;
 	close(fd);
 
-        cl_platform_id platform_id = NULL;
+        cl_platform_id platform_ids[MAX_PLATFORMS] = { NULL };
         cl_uint ret_num_platforms;
         cl_uint ret_num_devices;
 
-        clGetPlatformIDs(1, &platform_id, &ret_num_platforms);
-        err = clGetDeviceIDs(platform_id, CL_DEVICE_TYPE_GPU, MAXGPU, &device_id, &ret_num_devices);
+        clGetPlatformIDs(MAX_PLATFORMS, platform_ids, &ret_num_platforms);
+        if (platform >= ret_num_platforms) {
+            printf("Error: Specified OpenCL Platform (%d) does not exist. Only %d platforms found\n", platform, ret_num_platforms);
+            return EXIT_FAILURE;
+        }
+        err = clGetDeviceIDs(platform_ids[platform], CL_DEVICE_TYPE_GPU, MAXGPU, &device_id, &ret_num_devices);
         if (err != CL_SUCCESS) {
-                printf("Error: Failed to create a device group!\n");
+                printf("Error: Failed to create a device group! Error %d\n", err);
                 return EXIT_FAILURE;
         }
 
@@ -615,9 +679,9 @@ int main(int argc, char **argv) {
 
 	struct timeval tv1, tv2;
 	gettimeofday(&tv1, NULL);
-	
+
 	usleep(5000000);
-	
+
         for(int run=0;;run++) {
 		gettimeofday(&tv2, NULL);
 		if(run % 3 == 0) {
@@ -632,4 +696,3 @@ int main(int argc, char **argv) {
 		while(pool() == -1);
         }
 }
-
