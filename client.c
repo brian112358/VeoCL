@@ -326,7 +326,11 @@ int submitnonce(char *nonce) {
 		return -1;
 	}
 
-	int bytes = read(sd, buffer, 1000);
+	#ifndef WIN32
+  int bytes = read(sd, buffer, 1000);
+  #else
+  int bytes = recv(sd, buffer, 1000, 0);
+  #endif
 	close(sd);
 
 	for(int i=0; i<bytes - 5; i++)
