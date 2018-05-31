@@ -418,8 +418,12 @@ void *worker(void *p1) {
         char *in  = (char*)malloc(55);
         char *out = (char*)malloc(NONCESIZE * gc->load);
 
+        struct timeval kernelStart, kernelEnd;
+
         for(;;) {
-                pthread_mutex_lock(&gc->gpulock);
+
+            gettimeofday(&kernelStart,NULL);
+            pthread_mutex_lock(&gc->gpulock);
 
         #ifndef WIN32
 		read(randfd, nonces, NONCESIZE);
@@ -446,18 +450,11 @@ void *worker(void *p1) {
                 if (err) {
                         exit(1);
                 }
-
-                struct timeval kernelStart, kernelEnd;
-                gettimeofday(&kernelStart,NULL);
 #ifdef CLWAIT
                 usleep(gc->waitus * 0.95);
 #endif
 
                 clFinish(gc->commands);
-
-                gettimeofday(&kernelEnd,NULL);
-                unsigned long time_in_micros = 1000000 * (kernelEnd.tv_sec - kernelStart.tv_sec) + (kernelEnd.tv_usec - kernelStart.tv_usec);
-                gc->waitus = time_in_micros;
 
                 err = clEnqueueReadBuffer( gc->commands, gc->output, CL_TRUE, 0, 8 * gc->load, out, 0, NULL, NULL );
                 if (err != CL_SUCCESS) {
@@ -495,6 +492,10 @@ void *worker(void *p1) {
 				while(submitnonce(submit) == -1);
 			}
 		}
+
+        gettimeofday(&kernelEnd,NULL);
+        unsigned long time_in_micros = 1000000 * (kernelEnd.tv_sec - kernelStart.tv_sec) + (kernelEnd.tv_usec - kernelStart.tv_usec);
+        gc->waitus = time_in_micros;
 	}
 }
 
